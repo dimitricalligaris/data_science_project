@@ -1,0 +1,339 @@
+---
+title: "Progetto Scienza dei Dati"
+author: "Dimitri Calligaris"
+output:
+  ioslides_presentation:
+    css: style.css
+    incremental: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+## Argomento
+
+**scommesse sportive**
+
+* analisi delle **quote**
+* rapporto tra le quote e la **frequenza** degli eventi collegati
+
+```{r, out.width = "512px", out.height= "256px", fig.align='right', echo=FALSE}
+
+knitr::include_graphics("images/balls.png")
+```
+
+## Dataset
+* dati: scommesse su eventi conclusi in **9 gg** consecutivi\
+(anno 2014)
+* bookmaker origine dei dati: **Betfair**
+
+
+```{r, out.width = "488px", out.height= "200px", fig.align='right', echo=FALSE}
+
+knitr::include_graphics("images/db.png")
+```
+
+```{r, echo = FALSE}
+
+# CARICAMENTO LIBRERIE
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(modelr)
+library(broom)      # augment()
+library(lubridate)
+library(ggpubr)     # ggarrange()
+
+
+# IMPORTAZIONE DEL FILE CSV
+import = read_csv("betfair.csv")
+
+
+## MODIFICHE AL DATASET ORIGINARIO
+
+table = import
+
+# rinomino le intestazioni, impostandole tutte a lettere minuscole
+names(table) = tolower(names(table))
+
+
+# elimino una riga specifica perché contenente dati errati
+table = table %>% slice(-292283)
+
+# rinominazione intestazioni e trasformazione colonne con data/ora
+table =
+  table %>%
+  rename (dt_actual_off='dt actual_off') %>% 
+  mutate_at(vars(settled_date,dt_actual_off,latest_taken,first_taken),dmy_hms) %>% 
+  mutate(scheduled_off=dmy_hm(scheduled_off))     # trasformazione in formato data-ora (posixct)
+
+# divido la colonna full_description in più colonne separate
+table = table %>% separate(full_description, sep="/", into=c("category1","category2","category3","category4","category5"))
+
+# aggiungo colonna id
+table = table %>% mutate(id = row_number()) %>% select(id,everything())
+
+```
+
+## Analisi
+È vero che all'aumentare della quota si riduce la probabilità dell'evento?
+
+
+## Analisi
+È vero che all'aumentare della quota si riduce la probabilità dell'evento?
+
+```{r, echo = FALSE}
+
+freq = table %>% 
+  select (odds,win_flag) %>% 
+  group_by(odds) %>%
+  summarise(wins=sum(win_flag),occurrencies=n()) %>% 
+  arrange(odds) %>% 
+  mutate(win_perc=wins*100/occurrencies)
+
+tot_occurrencies = sum(freq$occurrencies)
+
+
+# VARIABILI PER FILTRI SUI DATI
+
+odds_filter1 = 3.5
+odds_filter2 = 100
+occurr_filter = 100
+
+
+# VARIABILI PER ASPETTO GRAFICO
+
+# colori
+sfondo = "#e0e8eb"
+point_colour = "#284395"
+esterno_grafici = sfondo
+contorno_grafici = sfondo
+
+freq %>%
+  filter(odds<odds_filter2,occurrencies>occurr_filter) %>% 
+  ggplot() +
+  geom_point(aes(odds,win_perc,size=occurrencies*100/tot_occurrencies),colour=point_colour,alpha=0.2) +
+  theme(plot.background = element_rect(fill = esterno_grafici,colour = contorno_grafici),
+        legend.background = element_rect(fill = esterno_grafici, colour = contorno_grafici),
+        legend.key = element_rect(fill = esterno_grafici, colour = contorno_grafici),
+        axis.title = element_text(face = "bold"),
+        legend.title = element_text(face = "bold")) +
+  labs(x="quote",y="esiti positivi (%)", size="occorrenze (%)")
+
+```
+
+## Analisi
+
+È vero che all'aumentare della quota si riduce la probabilità dell'evento?
+
+```{r, echo = FALSE}
+odds_plot=
+freq %>%
+  filter(odds<odds_filter1,occurrencies>occurr_filter) %>% 
+  ggplot() +
+  geom_point(aes(odds,win_perc),colour=point_colour) +
+  theme(plot.background = element_rect(fill = esterno_grafici, colour = contorno_grafici),
+        axis.title = element_text(face = "bold"),
+        legend.title = element_text(face = "bold")) +
+  labs(x="quote",y="esiti positivi (%)")
+
+odds_plot
+
+```
+
+## Sviluppo del modello
+
+formula:  $$ y = y_f + (y_0 - y_f) \cdot e^{-\alpha \cdot x} $$\
+
+```{r, echo = FALSE}
+## CREAZIONE MODELLO DECADIMENTO ESPONENZIALE
+
+freq_model = freq %>% filter(odds<odds_filter1,occurrencies>occurr_filter) %>% 
+  select(odds,win_perc)
+
+freq_model = freq_model %>% 
+  mutate(y=win_perc) %>% 
+  select(odds,y)
+
+odds_m = freq_model$odds
+
+model = nls(y ~ SSasymp(odds_m, yf, y0, log_alpha), data = freq_model)
+model
+
+```
+
+## Sviluppo del modello
+
+formula:  $$ y = y_f + (y_0 - y_f) \cdot e^{-exp(log(\alpha)) \cdot x} $$\
+
+```{r, echo = FALSE}
+
+model
+
+```
+
+## Sviluppo del modello
+
+formula:  $$ y = 23.2494449 + 214.1615181 \cdot e^{-exp(0.0517597) \cdot x} $$\
+
+coefficienti:
+
+```{r, echo = FALSE}
+
+coef(model)
+
+```
+
+## Analisi della correlazione
+
+```{r, echo = FALSE}
+
+odds_plot
+
+```
+
+## Analisi della correlazione
+
+```{r, echo = FALSE}
+
+## GRAFICO MODELLO
+model_plot =
+ggplot(aes(odds_m, y), data = augment(model)) +
+  geom_point(alpha=0.25) +
+  geom_line(aes(y = .fitted),colour="darkred",size=1) +
+  theme(plot.background = element_rect(fill = esterno_grafici, colour = contorno_grafici),
+        axis.title = element_text(face = "bold"),
+        legend.title = element_text(face = "bold")) +
+  labs(x="quote",y="esiti positivi (%)")
+
+model_plot
+
+# COEFFICIENTE DI PEARSON
+r = cor(freq_model$odds,freq_model$y)
+
+```
+
+## Analisi della correlazione
+
+```{r, echo = FALSE}
+
+## GRAFICO MODELLO
+model_plot
+
+```
+\
+\
+\
+**Indici di correlazione**\
+
+
+```{r}
+r
+r^2
+
+```
+
+## Analisi dei residui
+
+```{r, echo = FALSE}
+
+# AGGIUNTA DEI RESIDUI
+tab_freq_model = add_residuals(freq_model, model)
+
+# GRAFICO RESIDUI
+resid_plot =
+ggplot(tab_freq_model) + 
+  geom_histogram(aes(resid), binwidth = 0.20, fill="#a488fc") +
+  theme(plot.background = element_rect(fill = esterno_grafici, colour = contorno_grafici),
+        axis.title = element_text(face = "bold"),
+        legend.title = element_text(face = "bold")) +
+  labs(x="entità residui",y="occorrenze")
+
+resid_plot
+
+min_max_resid= full_join(tab_freq_model %>% summarise(min(resid)),
+          tab_freq_model %>% summarise(max(resid)),
+          by = character())
+
+```
+
+## Analisi dei residui
+
+```{r, echo = FALSE}
+
+# GRAFICO RESIDUI
+resid_plot
+
+min_max_resid= full_join(tab_freq_model %>% summarise(min(resid)),
+          tab_freq_model %>% summarise(max(resid)),
+          by = character())
+
+```
+
+```{r, echo = FALSE}
+knitr::kable(min_max_resid, format="markdown")
+```
+
+## Analisi dei residui
+
+```{r, echo = FALSE}
+
+# ENTITA' RESIDUI IN RELAZIONE ALLE QUOTE
+resid_plot_2 =
+tab_freq_model %>% 
+  ggplot(aes(odds,resid)) +
+  geom_point(colour=point_colour) +
+  geom_smooth(span=0.3,colour="darkgreen",se=FALSE) +
+  theme(plot.background = element_rect(fill = esterno_grafici, colour = contorno_grafici),
+        axis.title = element_text(face = "bold"),
+        legend.title = element_text(face = "bold")) +
+  labs(x="quote",y="entità residui")
+
+resid_plot_2
+
+```
+
+## Analisi dei residui
+
+```{r, echo = FALSE}
+
+# ENTITA' RESIDUI IN RELAZIONE ALLE QUOTE
+resid_plot_3 =
+resid_plot_2 +
+  geom_ribbon(aes(ymin = 0,ymax = predict(loess(resid ~ odds,span=0.3))), alpha = 0.3, fill = "#4795bf")
+
+resid_plot_3
+
+```
+
+## Confronto grafici
+
+```{r, echo = FALSE}
+
+## CONFRONTO TRA I DUE GRAFICI
+
+cut_model_plot =
+  model_plot + theme(axis.title.x = element_blank(),
+                     axis.text.x=element_blank(),
+                     axis.ticks.x=element_blank())
+
+ggarrange(cut_model_plot,resid_plot_3, 
+          ncol = 1, nrow = 2,align = "v")
+
+```
+
+## Conclusioni
+
+* c'è una forte **correlazione inversa** tra quote e probabilità \
+\
+* la correlazione tra le due variabili è di tipo **non lineare** \
+\
+* alcune quote sono **statisticamente più favorevoli** di altre in base all'**intervallo di appartenenza** \
+
